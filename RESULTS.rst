@@ -158,23 +158,24 @@ variance, the more buckets there are with way more or less than the
 mean, and hence are less evenly distributed.
 
 Poisson distributions have the interesting property that the variance
-is equal to the mean. This means we can use variance / mean of the as
-a measure of how good a hash function is, where large values are bad,
-and 1.0 is ideal. Any values < 1.0 are probably statistical noise.
+is equal to the mean. This means we can use (mean / variance) as a
+measure of how good a hash function is, where small values near zero
+are bad, and 1.0 is ideal. Any values > 1.0 are probably statistical
+noise.
 
-Looking at the (variance / mean) of the number of entries per hash
+Looking at the (mean / variance) of the number of entries per hash
 value gives us an indication of how close to ideal a hash is for
 collisions.
 
 Dividing the hash space into 2^N buckets is tested using "and_mask"
 (AndMask described above), "mod_mask" (ModMask described above) or
-"mix_mask" (mix32() and then ModMask). The (variance/mean) bucket
+"mix_mask" (mix32() and then ModMask). The (mean / variance) bucket
 size for these give an indication of the hashtable collision rate for
 the hash using those bucketing methods.
 
 Finally hashtable clustering is tested as "and_clust", "mod_clust",
 and "mix_clust" for the 3 bucketing methods merging 16 adjacent
-buckets into a "bucket-cluster". The mean/variance of the
+buckets into a "bucket-cluster". The (mean / variance) of the
 bucket-cluster sizes shows how badly the hash clusters for those
 bucketing methods.
 
@@ -201,10 +202,10 @@ for small ASCII blocks gives a tight bell-curve custered distribution
 that doesn't even overflow out of 16bits. ModPrime discards too much
 of the hash space.
 
-Character mapping using "mul" makes no difference at all because for a
-fixed block size it behaves like constant multipliers for s1 and s2,
-which does nothing for the collisions and little for the clustering.
-Using "pow" makes a significant difference.
+Character mapping using "mul" makes little difference at all because
+for a fixed block size it behaves like constant multipliers for s1 and
+s2, which does nothing for the collisions and little for the
+clustering. Using "pow" makes a significant difference.
 
 For bucketing, and_mask gives terrible clustering and collisions
 because it discards bits from the s2 sum which is better distributed
@@ -212,7 +213,7 @@ than s1. Using mod_mask doesn't help much, because the poor
 distribution is in the high bits of s1 which are in the middle of the
 hash, and ModMask mixes the discarded high bits into the low bits,
 leaving the middle bits largely untouched. Using mix_mask solves the
-clustering, but not the collisions.
+clustering, but cannot fix the collisions.
 
 CyclicPoly
 ----------

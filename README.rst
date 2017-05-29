@@ -33,7 +33,6 @@ RESULTS.rst     Discussion and analysis comparing different rollsums.
 LICENSE         Copyright and licencing details.
 rollsum.py      Script to test different rollsum algorithms.
 run.sh          Script to run rollsum.py for many rollsum variants.
-runtest.py      Script to compare rollsum variants.
 cmphash.py      Script to compare rollsum, RabinKarp, and CyclicPoly.
 lcg_inthash.py  LCG random number and primes functions.
 data/csv.dat    File fragment of csv (ASCII) data for input.
@@ -75,10 +74,6 @@ a summary::
 
     $ run.sh -B 1K -C 1000000 ./data
 
-To generate comparisons of rollsum variants::
-
-    $ runtest.py
-    
 To generate comparisons of rollsum, RabinKarp, and CyclicPoly hashes::
 
     $ cmptest.py
@@ -91,7 +86,7 @@ Documentation
 
 http://minkirri.apana.org.au/wiki/LibrsyncRollsumAnalysis
   Some early analysis and observations.
-  
+
 http://github.com/dbaarda/rollsum-tests
   The project on github.
 

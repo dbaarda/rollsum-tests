@@ -236,6 +236,35 @@ class Stats(object):
     return "num=%s sum=%s min/avg/max/sdev=%s/%s/%s/%s" % (self.num, self.sum, self.min, self.avg, self.max, self.sdev)
 
 
+class TableStats(Stats):
+  """Statistics for hastable performance."""
+
+  def addempty(self, size):
+      # Get the number of empty buckets and collisions.
+      self.num_empty = size - self.num
+      self.num_colls = self.sum - self.num
+      # Add all the empty table entries.
+      self.add(0, self.num_empty)
+      self.size = self.num
+      self.count = self.sum
+
+  @property
+  def perf(self):
+    return self.avg / self.var
+
+  @property
+  def colls(self):
+    return float(self.num_colls) / self.count
+
+  @property
+  def empty(self):
+    return float(self.num_empty) / self.size
+
+  def __str__(self):
+    return "size=%s count=%s min/avg/max/sdev=%s/%s/%s/%s empty=%.6f colls=%.6f perf=%.4f" % (
+        self.size, self.count, self.min, self.avg, self.max, self.sdev, self.empty, self.colls, self.perf)
+
+
 class HashTable(object):
   """Simple Hashtable for collecting hash collision stats."""
 
@@ -248,42 +277,20 @@ class HashTable(object):
     self.data.setdefault(self.hash(key), set()).add(value)
 
   def stats(self):
-    stats=Stats()
-    # Add all the used table entries.
+    stats = TableStats()
+    # Add all the used table buckets.
     for v in self.data.itervalues():
       stats.add(len(v))
-    empty, colls = self.size - stats.num, stats.sum - stats.num
-    # Add all the empty table entries.
-    stats.add(0, empty)
-    return stats, float(empty) / self.size, float(colls) /stats.sum
+    # Add all the empty table buckets.
+    stats.addempty(self.size)
+    return stats
 
   def __str__(self):
-    return "%s empty=%.6f collisions=%.6f" % self.stats()
+    return str(self.stats())
 
-
-def pow(c):
-  """Rollsum map(c)->c^2 function."""
-  c = ord(c)
-  return c*c
-
-def mul(c):
-  """Rollsum ord(c)*173 function."""
-  return ord(c) * 173
-
-def mix16(c):
-  """16bit mix like used in MurmurHash."""
-  c = ord(c)
-  c ^= c<<4
-  c = (c*149) & 0xffff
-  c ^= c>>7
-  return c
 
 def mix32(i):
   """MurmurHash3 mix32 finalizer."""
-  try:
-    i = ord(i)
-  except:
-    pass
   i ^= i >> 16
   i = (i * 0x85ebca6b) & 0xffffffff
   i ^= i >>13
@@ -294,6 +301,18 @@ def mix32(i):
 def md5sum(data):
   return md5.new(data).digest()
 
+def pow(c):
+  """Rollsum map(c)->c^2 function."""
+  c = ord(c)
+  return c*c
+
+def mul(c):
+  """Rollsum ord(c)*173 function."""
+  return ord(c) * 173
+
+_mix32_map = [mix32(i) for i in range(256)]
+def mix(c):
+  return _mix32_map[ord(c)]
 
 def runtest(rollsum, infile, blocksize=1024, blockcount=10000, tables=()):
   """Run a test using a rollsum instance collecting stats in multiple tables."""
@@ -335,7 +354,7 @@ if __name__ == "__main__":
   def map(s):
     """Parser for --map argument."""
     try:
-      return dict(ord=ord, pow=pow, mul=mul, mix16=mix16, mix32=mix32)[s]
+      return dict(ord=ord, pow=pow, mul=mul, mix=mix)[s]
     except KeyError:
       raise ValueError(s)
 
@@ -350,13 +369,13 @@ if __name__ == "__main__":
   parser = argparse.ArgumentParser(description='Test different rollsum variants')
   parser.add_argument('--rollsum','-R', type=rollsum, default=RollSum, help='Rollsum to use "rs|rk|cp".')
   parser.add_argument('--blocksize','-B', type=size, default=1024, help='Block size to use.')
-  parser.add_argument('--blockcount','-C', type=size, default=1000, help='Number of blocks to use.')
+  parser.add_argument('--blockcount','-C', type=size, default=1000000, help='Number of blocks to use.')
   parser.add_argument('--seed', type=int, default=0, help='Value to initialize hash to.')
   parser.add_argument('--offs', type=int, default=31, help='Value to add to each input byte.')
   parser.add_argument('--base', type=eval, default=2**16, help='Value to mod s1 and s2 with.')
   parser.add_argument('--mult', type=eval, default=None, help='RabinKarp multiplier to use.')
   parser.add_argument('--map', type=map, default=ord, help='Map type to use "ord|pow|mul|mix16|mix32".')
-  parser.add_argument('--indexbits', type=int, default=12, help='Number of bits in the hashtable index.')
+  parser.add_argument('--indexbits', type=int, default=20, help='Number of bits in the hashtable index.')
   args=parser.parse_args()
 
   index_size = 2**args.indexbits
