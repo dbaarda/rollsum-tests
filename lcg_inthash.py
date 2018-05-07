@@ -52,9 +52,8 @@ def makehash(m, a, c):
     return (a * x + c) % m
   return hash
 
-
 def check(m, a, c):
-  """Check that a hash for size m covers all possible hash values.""" 
+  """Check that a hash for size m covers all possible hash values."""
   hash = makehash(m, a, c)
   f = set(xrange(0, m))
   for x in range(0, m):
@@ -62,6 +61,18 @@ def check(m, a, c):
     f.discard(h)
     print x, h
   print "m=%s,a=%s,c=%s missed set=%s" % (m,a,c,f)
+
+def period(m, a, c):
+  """Find the period for a hash starting at 1."""
+  hash = makehash(m, a, c)
+  h,o = 1, []
+  while h not in o:
+    print h
+    o.append(h)
+    h = hash(h)
+  print h
+  p = len(o) - o.index(h)
+  print "m=%s,a=%s,c=%s period=%s" % (m, a, c, p)
 
 def testa(m):
   b = 1
