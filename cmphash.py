@@ -43,6 +43,7 @@ def fmtstats(stats):
 for a in sorted(ans, key=lambda a: (a[0:2], -a[-2].perf, -a[-1].perf)):
   src, bsize, bcount, sum, table, clust = a
   bsize = '%sK' % (bsize/K)
+  bcount = table.count
   table = fmtstats(table)
   clust = fmtstats(clust)
   fmt = '%s %4s %s %52s %s %s'
