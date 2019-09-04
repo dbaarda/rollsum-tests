@@ -1,5 +1,6 @@
 #!/usr/bin/python
 import md5
+from lcg_inthash import modinv
 
 class BaseHash(object):
   """Base class for rolling checksums."""
@@ -111,7 +112,10 @@ class RabinKarp(BaseHash):
       mult: optional Rabin-Karp multiplier to use (default: 2^32 - 3).
     """
     mult = mult or ((1 << 32) - 3)
+    # The rabinkarp multiplier.
     self.mult = mult
+    # The modular 2^32 inverse of mult.
+    self.invm = modinv(mult, 1 << 32)
     # Calc ajustment for rolling character out.
     self._adj = offs + (mult - 1) * seed
     # Initialize multiplier for rolling character out to mult^count = 1.
@@ -122,15 +126,11 @@ class RabinKarp(BaseHash):
     return 'RabinKarp(seed=%s, offs=%s, map=%s, mult=%#x)' % (
         self.seed, self.offs, self.map.__name__, self.mult)
 
-  def _calcs(self):
-    """Calculate multiplier for rolling character out = mult^count & mask."""
-    self._multn = (self.mult ** self.count) & self.mask
-
   def update(self, data):
     for c in data:
       self.sum = (self.sum * self.mult + self.map(c) + self.offs) & self.mask
     self.count += len(data)
-    self._calcs()
+    self._multn = (self.mult ** self.count) & self.mask
 
   def rollin(self, cn):
     self.sum = (self.sum * self.mult + self.map(cn) + self.offs) & self.mask
@@ -139,7 +139,7 @@ class RabinKarp(BaseHash):
 
   def rollout(self, c1):
     self.count -= 1
-    self._calcs()
+    self._multn = (self._multn * self.invm) & self.mask
     self.sum = (self.sum - self._multn * (self.map(c1) + self._adj)) & self.mask
 
   def rotate(self, c1, cn):

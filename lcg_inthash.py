@@ -1,5 +1,27 @@
 #!/usr/bin/python
 
+def modinv(k, m):
+  """ Calculate the inverse of "k" modular "m".
+
+  This is the number "i" that is equivalent to 1/k modular m and satisfies the
+  equation;
+
+  (i * k) % m = 1
+  """
+  # Values k and m need to be coprime AKA relatively prime.
+  assert not set(factors(m)) & set(factors(k))
+  x, xn = 0, 1
+  n, d = m, k
+  q, r = n / d, n % d
+  while r:
+    x, xn = xn, x - xn * q
+    n, d = d, r
+    q, r = n / d, n % d
+  i = xn % m
+  # The inverse i multiplied by k modular m must give 1.
+  assert (i * k) % m == 1
+  return i
+
 def factors(n):
   """Find all the prime factors of n."""
   f = []
@@ -29,11 +51,16 @@ def lcg_ac(m):
   """Calculate LCG a,c terms for a given m size."""
   factors_m = factors(m)
   primefactors_m = set(factors_m)
-  c = max(set(primes(m)) - primefactors_m)
+  # Choose the largest prime < m/2 that is not a factor of m.
+  c = max(set(primes(m/2)) - primefactors_m)
+  # Make a-1 have all the prime factors of m.
   a_1 = reduce(int.__mul__, primefactors_m)
+  # If m is divisible by 4, make sure a-1 is also.
   if factors_m.count(2) > 1:
     a_1 *= 2
-  a_1 *= maxprime(m / (2*a_1))
+  # If a-1 is too small compared to m, multiply it by another prime.
+  if 2*a_1 < m:
+    a_1 *= maxprime(m / a_1)
   return a_1+1, c
 
 def makehash(m, a, c):
@@ -86,8 +113,11 @@ def testa(m):
   return a
 
 if __name__ == '__main__':
+  K = 0b1000000100000100001000100101
+  M = 1<<32
+  print "m=%s modinv(m)=%s" % (hex(K), hex(modinv(K,M)))
   m = 0xffff
   a, c = lcg_ac(m)
-  print hex(m), bin(a), bin(c)
+  print "m=%s, a=%s (%s), c=%s (%s)" %(hex(m), hex(a), bin(a), hex(c), bin(c))
   #a, c = testa(m), 0
   #check(m, a, c)
