@@ -25,7 +25,10 @@ def modinv(k, m):
 def factors(n):
   """Find all the prime factors of n."""
   f = []
-  for i in xrange(2, int(n**0.5)+1):
+  while n % 2 == 0:
+    f.append(2)
+    n /= 2
+  for i in xrange(3, int(n**0.5)+1, 2):
     while n % i == 0:
       f.append(i)
       n /= i
