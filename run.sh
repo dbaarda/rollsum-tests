@@ -52,7 +52,7 @@ runtests () {
 
 for src in csv zip; do
   [ -z $SKIPTESTS ] && runtests ${src}
-  for s in 'rollsum' 's1sum' 's2sum' 'mask_fff' 'mod_fff'; do
+  for s in 'rollsum' 's1sum' 's2sum' 'and_mask' 'mod_mask' 'mix_mask'; do
     for f in ${OUTDIR}/${src}-${BLOCKSIZE}-*-*-*-*.txt; do
       run=$(sed -n '/Results/ {s:Results for ::; p}' $f)
       stats=$(sed -n "/^$s:/ {s:.* min/:min:; p}" $f)
