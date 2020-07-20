@@ -37,6 +37,8 @@ class RollSum(BaseHash):
       map: optional mapping function to transform input bytes.
       base: optional base to mod sum and sum2 with.
     """
+    # We only use 16 LSB's of the map output.
+    map = lambda c: map(c) & 0xffff
     self.base, self.sum2 = base, 0
     # Find the max updates without doing mod where sum2 doesn't overflow.
     # Largest n such that n*(n+1)/2*(cmax+offs)+(n+1)*(base-1) <= 2^32-1.
@@ -67,7 +69,7 @@ class RollSum(BaseHash):
   def rollin(self, cn):
     self.sum += self.map(cn) + self.offs
     # Note: timeit shows this is a little faster than "% self.base".
-    if self.sum >= self.base:
+    while self.sum >= self.base:
       self.sum -= self.base
     self.sum2 += self.sum
     if self.sum2 >= self.base:
@@ -77,31 +79,31 @@ class RollSum(BaseHash):
   def rollout(self, c1):
     c1 = self.map(c1) + self.offs
     self.sum -= c1
-    if self.sum < 0:
+    while self.sum < 0:
       self.sum += self.base
     self.sum2 -= self.count * c1 + self.seed
-    if self.sum2 < 0:
-      self.sum2 += self.base
+    self.sum2 %= self.base
     self.count -= 1
 
   def rotate(self, c1, cn):
     c1, cn = self.map(c1), self.map(cn)
-    self.sum = (self.sum + cn - c1) % self.base
-    # Note: timeit shows this is a little slower than "% self.base".
-    # if self.sum >= self.base:
-    #   self.sum -= self.base
-    # elif self.sum < 0:
-    #   self.sum += self.base
-    self.sum2 = (self.sum2 + self.sum - self.count * (c1 + self.offs) - self.seed) % self.base
+    self.sum += cn - c1
+    # Note: timeit shows this is a little faster than "%= self.base".
+    while self.sum >= self.base:
+      self.sum -= self.base
+    while self.sum < 0:
+      self.sum += self.base
+    self.sum2 += self.sum - (self.count * (c1 + self.offs) + self.seed)
+    self.sum2 %= self.base
 
   def digest(self):
     return (self.sum2<<16) | self.sum
 
 
 class RabinKarp(BaseHash):
-  """Rabin-Karp rolling checksum."""
+  """Rabin-Karp rolling checksum (polyhash)."""
 
-  def __init__(self, data=None, seed=0, offs=0, map=ord, mult=None):
+  def __init__(self, data=None, seed=0, offs=0, map=ord, mult=0x08104225):
     """Initialize a Rabin-Karp rollsum calculator.
 
     Args:
@@ -109,9 +111,8 @@ class RabinKarp(BaseHash):
       seed: optional value to initialize sum with.
       offs: optional offset to add to each byte.
       map: optional mapping function to transform input bytes.
-      mult: optional Rabin-Karp multiplier to use (default: 2^32 - 3).
+      mult: optional Rabin-Karp multiplier to use (default: 0x08104225).
     """
-    mult = mult or ((1 << 32) - 3)
     # The rabinkarp multiplier.
     self.mult = mult
     # The modular 2^32 inverse of mult.
@@ -148,7 +149,7 @@ class RabinKarp(BaseHash):
 
 
 class CyclicPoly(BaseHash):
-  """Cyclic Polynomial rolling checksum."""
+  """Cyclic Polynomial rolling checksum (buzzhash)."""
 
   def __init__(self, data=None, seed=0, offs=0, map=ord):
     # Calculate adjustment for rolling characters out.
@@ -195,6 +196,41 @@ class CyclicPoly(BaseHash):
     self.sum = h ^ cn ^ c1
 
 
+class Gear(BaseHash):
+  """Gear rolling checksum.
+
+  This rollsum is special and designed for chunking. It effectively uses a
+  fixed window with as many bytes as there are bits in the checksum, and
+  naturally rolls data out by shifting it left for each byte rolled in. This
+  means it is very fast and you don't need to keep a sliding window. It also
+  means it can't really be used for checksumming a block of data, as it always
+  only checksums the last 32 bytes.
+
+  Note that this is identical to RabinKarp with mult=2.
+  """
+
+  def __init__(self, data=None, offs=0, map=ord):
+    super(Gear, self).__init__(data, 0, offs, map)
+    self.count = 32
+
+  def __str__(self):
+    return 'Gear(offs=%s, map=%s)' % (
+        self.offs, self.map.__name__)
+
+  def update(self, data):
+    for c in data:
+      self.sum = ((self.sum<<1) + self.map(c) + self.offs) & self.mask
+
+  def rollin(self, cn):
+    self.sum = ((self.sum<<1) + self.map(cn) + self.offs) & self.mask
+
+  def rollout(self, c1):
+    pass
+
+  def rotate(self, c1, cn):
+    self.rollin(cn)
+
+
 class Stats(object):
   """Simple distribution statistics."""
 
@@ -233,7 +269,7 @@ class Stats(object):
     return self.var ** 0.5
 
   def __str__(self):
-    return "num=%s sum=%s min/avg/max/sdev=%s/%s/%s/%s" % (self.num, self.sum, self.min, self.avg, self.max, self.sdev)
+    return "num=%s sum=%s min/avg/max/dev=%s/%s/%s/%s" % (self.num, self.sum, self.min, self.avg, self.max, self.sdev)
 
 
 class TableStats(Stats):
@@ -261,7 +297,7 @@ class TableStats(Stats):
     return float(self.num_empty) / self.size
 
   def __str__(self):
-    return "size=%s count=%s min/avg/max/sdev=%s/%s/%s/%s empty=%.6f colls=%.6f perf=%.4f" % (
+    return "size=%s count=%s min/avg/max/dev=%s/%s/%s/%s empty=%.6f colls=%.6f perf=%.4f" % (
         self.size, self.count, self.min, self.avg, self.max, self.sdev, self.empty, self.colls, self.perf)
 
 
@@ -306,13 +342,62 @@ def pow(c):
   c = ord(c)
   return c*c
 
+_mul_map = [(c * 0x08104225) & 0xffffffff for c in xrange(256)]
 def mul(c):
-  """Rollsum ord(c)*173 function."""
-  return ord(c) * 173
+  """Rollsum ord(c)*0x08104225&0xffffffff function."""
+  return _mul_map[ord(c)]
 
-_mix32_map = [mix32(i) for i in range(256)]
+_mix32_map = [mix32(i) for i in xrange(256)]
 def mix(c):
   return _mix32_map[ord(c)]
+
+# This is the bytehash map used by ipfs buzhash.
+_ipfs_map = [
+    0x6236e7d5, 0x10279b0b, 0x72818182, 0xdc526514, 0x2fd41e3d, 0x777ef8c8,
+    0x83ee5285, 0x2c8f3637, 0x2f049c1a, 0x57df9791, 0x9207151f, 0x9b544818,
+    0x74eef658, 0x2028ca60, 0x0271d91a, 0x27ae587e, 0xecf9fa5f, 0x236e71cd,
+    0xf43a8a2e, 0xbb13380, 0x9e57912c, 0x89a26cdb, 0x9fcf3d71, 0xa86da6f1,
+    0x9c49f376, 0x346aecc7, 0xf094a9ee, 0xea99e9cb, 0xb01713c6, 0x88acffb,
+    0x2960a0fb, 0x344a626c, 0x7ff22a46, 0x6d7a1aa5, 0x6a714916, 0x41d454ca,
+    0x8325b830, 0xb65f563, 0x447fecca, 0xf9d0ea5e, 0xc1d9d3d4, 0xcb5ec574,
+    0x55aae902, 0x86edc0e7, 0xd3a9e33, 0xe70dc1e1, 0xe3c5f639, 0x9b43140a,
+    0xc6490ac5, 0x5e4030fb, 0x8e976dd5, 0xa87468ea, 0xf830ef6f, 0xcc1ed5a5,
+    0x611f4e78, 0xddd11905, 0xf2613904, 0x566c67b9, 0x905a5ccc, 0x7b37b3a4,
+    0x4b53898a, 0x6b8fd29d, 0xaad81575, 0x511be414, 0x3cfac1e7, 0x8029a179,
+    0xd40efeda, 0x7380e02, 0xdc9beffd, 0x2d049082, 0x99bc7831, 0xff5002a8,
+    0x21ce7646, 0x1cd049b, 0xf43994f, 0xc3c6c5a5, 0xbbda5f50, 0xec15ec7,
+    0x9adb19b6, 0xc1e80b9, 0xb9b52968, 0xae162419, 0x2542b405, 0x91a42e9d,
+    0x6be0f668, 0x6ed7a6b9, 0xbc2777b4, 0xe162ce56, 0x4266aad5, 0x60fdb704,
+    0x66f832a5, 0x9595f6ca, 0xfee83ced, 0x55228d99, 0x12bf0e28, 0x66896459,
+    0x789afda, 0x282baa8, 0x2367a343, 0x591491b0, 0x2ff1a4b1, 0x410739b6,
+    0x9b7055a0, 0x2e0eb229, 0x24fc8252, 0x3327d3df, 0xb0782669, 0x1c62e069,
+    0x7f503101, 0xf50593ae, 0xd9eb275d, 0xe00eb678, 0x5917ccde, 0x97b9660a,
+    0xdd06202d, 0xed229e22, 0xa9c735bf, 0xd6316fe6, 0x6fc72e4c, 0x206dfa2,
+    0xd6b15c5a, 0x69d87b49, 0x9c97745, 0x13445d61, 0x35a975aa, 0x859aa9b9,
+    0x65380013, 0xd1fb6391, 0xc29255fd, 0x784a3b91, 0xb9e74c26, 0x63ce4d40,
+    0xc07cbe9e, 0xe6e4529e, 0xfb3632f, 0x9438d9c9, 0x682f94a8, 0xf8fd4611,
+    0x257ec1ed, 0x475ce3d6, 0x60ee2db1, 0x2afab002, 0x2b9e4878, 0x86b340de,
+    0x1482fdca, 0xfe41b3bf, 0xd4a412b0, 0xe09db98c, 0xc1af5d53, 0x7e55e25f,
+    0xd3346b38, 0xb7a12cbd, 0x9c6827ba, 0x71f78bee, 0x8c3a0f52, 0x150491b0,
+    0xf26de912, 0x233e3a4e, 0xd309ebba, 0xa0a9e0ff, 0xca2b5921, 0xeeb9893c,
+    0x33829e88, 0x9870cc2a, 0x23c4b9d0, 0xeba32ea3, 0xbdac4d22, 0x3bc8c44c,
+    0x1e8d0397, 0xf9327735, 0x783b009f, 0xeb83742, 0x2621dc71, 0xed017d03,
+    0x5c760aa1, 0x5a69814b, 0x96e3047f, 0xa93c9cde, 0x615c86f5, 0xb4322aa5,
+    0x4225534d, 0xd2e2de3, 0xccfccc4b, 0xbac2a57, 0xf0a06d04, 0xbc78d737,
+    0xf2d1f766, 0xf5a7953c, 0xbcdfda85, 0x5213b7d5, 0xbce8a328, 0xd38f5f18,
+    0xdb094244, 0xfe571253, 0x317fa7ee, 0x4a324f43, 0x3ffc39d9, 0x51b3fa8e,
+    0x7a4bee9f, 0x78bbc682, 0x9f5c0350, 0x2fe286c, 0x245ab686, 0xed6bf7d7,
+    0xac4988a, 0x3fe010fa, 0xc65fe369, 0xa45749cb, 0x2b84e537, 0xde9ff363,
+    0x20540f9a, 0xaa8c9b34, 0x5bc476b3, 0x1d574bd7, 0x929100ad, 0x4721de4d,
+    0x27df1b05, 0x58b18546, 0xb7e76764, 0xdf904e58, 0x97af57a1, 0xbd4dc433,
+    0xa6256dfd, 0xf63998f3, 0xf1e05833, 0xe20acf26, 0xf57fd9d6, 0x90300b4d,
+    0x89df4290, 0x68d01cbc, 0xcf893ee3, 0xcc42a046, 0x778e181b, 0x67265c76,
+    0xe981a4c4, 0x82991da1, 0x708f7294, 0xe6e2ae62, 0xfc441870, 0x95e1b0b6,
+    0x445f825, 0x5a93b47f, 0x5e9cf4be, 0x84da71e7, 0x9d9582b0, 0x9bf835ef,
+    0x591f61e2, 0x43325985, 0x5d2de32e, 0x8d8fbf0f, 0x95b30f38, 0x7ad5b6e,
+    0x4e934edf, 0x3cd4990e, 0x9053e259, 0x5c41857d]
+def ipfs(c):
+  return _ipfs_map[ord(c)]
 
 def runtest(rollsum, infile, blocksize=1024, blockcount=10000, tables=()):
   """Run a test using a rollsum instance collecting stats in multiple tables."""
@@ -347,14 +432,14 @@ if __name__ == "__main__":
   def rollsum(s):
     """Parser for --rollsum argument."""
     try:
-      return dict(rs=RollSum, rk=RabinKarp, cp=CyclicPoly)[s]
+      return dict(rs=RollSum, rk=RabinKarp, cp=CyclicPoly, gr=Gear)[s]
     except KeyError:
       raise ValueError(s)
 
   def map(s):
     """Parser for --map argument."""
     try:
-      return dict(ord=ord, pow=pow, mul=mul, mix=mix)[s]
+      return dict(ord=ord, pow=pow, mul=mul, mix=mix, ipfs=ipfs)[s]
     except KeyError:
       raise ValueError(s)
 
@@ -367,14 +452,14 @@ if __name__ == "__main__":
       return int(s)
 
   parser = argparse.ArgumentParser(description='Test different rollsum variants')
-  parser.add_argument('--rollsum','-R', type=rollsum, default=RollSum, help='Rollsum to use "rs|rk|cp".')
+  parser.add_argument('--rollsum','-R', type=rollsum, default=RollSum, help='Rollsum to use "rs|rk|cp|gr".')
   parser.add_argument('--blocksize','-B', type=size, default=1024, help='Block size to use.')
   parser.add_argument('--blockcount','-C', type=size, default=1000000, help='Number of blocks to use.')
   parser.add_argument('--seed', type=int, default=0, help='Value to initialize hash to.')
   parser.add_argument('--offs', type=int, default=31, help='Value to add to each input byte.')
-  parser.add_argument('--base', type=eval, default=2**16, help='Value to mod s1 and s2 with.')
-  parser.add_argument('--mult', type=eval, default=None, help='RabinKarp multiplier to use.')
-  parser.add_argument('--map', type=map, default=ord, help='Map type to use "ord|pow|mul|mix16|mix32".')
+  parser.add_argument('--base', type=eval, default=2**16, help='RollSum value to mod s1 and s2 with.')
+  parser.add_argument('--mult', type=eval, default=0x08104225, help='RabinKarp multiplier to use.')
+  parser.add_argument('--map', type=map, default=ord, help='Map type to use "ord|pow|mul|mix|ipfs".')
   parser.add_argument('--indexbits', type=int, default=20, help='Number of bits in the hashtable index.')
   args=parser.parse_args()
 
@@ -387,6 +472,8 @@ if __name__ == "__main__":
     rollsum = RabinKarp(seed=args.seed, offs=args.offs, map=args.map, mult=args.mult)
   elif args.rollsum == CyclicPoly:
     rollsum = CyclicPoly(seed=args.seed, offs=args.offs, map=args.map)
+  elif args.rollsum == Gear:
+    rollsum = Gear(offs=args.offs, map=args.map)
   sumtable = HashTable(2**32, lambda k: k)
   s1index = HashTable(2**16, lambda k: k & 0xffff)
   s2index = HashTable(2**16, lambda k: k >> 16)
