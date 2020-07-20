@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/pypy -O
 import md5
 from lcg_inthash import modinv
 
@@ -37,19 +37,24 @@ class RollSum(BaseHash):
       map: optional mapping function to transform input bytes.
       base: optional base to mod sum and sum2 with.
     """
-    # We only use 16 LSB's of the map output.
-    map = lambda c: map(c) & 0xffff
+    # We only use 16 LSB's of the map output, so wrap map if it is >16bit.
+    cmax = max(map(chr(c)) for c in xrange(256))
+    if cmax > 0xffff:
+      _map = lambda c: map(c) & 0xffff
+      _map.__name__ = map.__name__
+      cmax = max(_map(chr(c)) for c in xrange(256))
+    else:
+      _map = map
     self.base, self.sum2 = base, 0
     # Find the max updates without doing mod where sum2 doesn't overflow.
     # Largest n such that n*(n+1)/2*(cmax+offs)+(n+1)*(base-1) <= 2^32-1.
     # Where cmax is the largest possible map(c) value.
     # Solving using (-b + sqrt(b^2 - 4*a*c)) / (2*a).
-    cmax = max(map(chr(c)) for c in range(256))
     a = (cmax + offs)/2.0
     b = a + (base-1)
     c = (base-1) - (2**32 - 1)
     self._nmax = int((-b + (b**2 - 4*a*c)**0.5) / (2*a))
-    super(RollSum, self).__init__(data, seed, offs, map)
+    super(RollSum, self).__init__(data, seed, offs, _map)
 
   def __str__(self):
     return 'RollSum(seed=%s, offs=%s, map=%s, base=%#x)' % (
