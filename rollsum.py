@@ -235,6 +235,7 @@ class Gear(BaseHash):
   def rotate(self, c1, cn):
     self.rollin(cn)
 
+inf = float('inf')
 
 class Stats(object):
   """Simple distribution statistics."""
@@ -242,7 +243,7 @@ class Stats(object):
   def __init__(self, data=None):
     self.num = 0
     self.sum = self.sum2 = 0
-    self.min = self.max = None
+    self.min, self.max = inf, -inf
     if data:
       self.update(data)
 
@@ -251,10 +252,8 @@ class Stats(object):
       self.num += num
       self.sum += v*num
       self.sum2 += v*v*num
-      if self.min is None or v < self.min:
-        self.min = v
-      if self.max is None or v > self.max:
-        self.max = v
+      self.min = min(self.min, v)
+      self.max = max(self.max, v)
 
   def update(self, data):
     for v in data:
@@ -270,11 +269,11 @@ class Stats(object):
     return float(self.sum2) / self.num - avg * avg
 
   @property
-  def sdev(self):
+  def dev(self):
     return self.var ** 0.5
 
   def __str__(self):
-    return "num=%s sum=%s min/avg/max/dev=%s/%s/%s/%s" % (self.num, self.sum, self.min, self.avg, self.max, self.sdev)
+    return "num=%s sum=%s min/avg/max/dev=%s/%s/%s/%s" % (self.num, self.sum, self.min, self.avg, self.max, self.dev)
 
 
 class TableStats(Stats):
@@ -303,7 +302,7 @@ class TableStats(Stats):
 
   def __str__(self):
     return "size=%s count=%s min/avg/max/dev=%s/%s/%s/%s empty=%.6f colls=%.6f perf=%.4f" % (
-        self.size, self.count, self.min, self.avg, self.max, self.sdev, self.empty, self.colls, self.perf)
+        self.size, self.count, self.min, self.avg, self.max, self.dev, self.empty, self.colls, self.perf)
 
 
 class HashTable(object):
