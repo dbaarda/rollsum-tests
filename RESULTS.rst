@@ -206,7 +206,7 @@ would.
 Comparisons
 ===========
 
-See the `cmphash.py output table `<./data/cmphash.rst>`_ for the raw
+See the `cmphash.py output table <./data/cmphash.rst>`_ for the raw
 results.
 
 RollSum
