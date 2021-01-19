@@ -10,25 +10,30 @@ def dotest(src, bsize, bcount, sum):
   clust = rollsum.HashTable(2**16, lambda k: (k & (2**20 - 1)) >> 4)
   datastats = rollsum.runtest(sum, f, bsize, bcount, (table, clust))
   #print "%-52s: %s %s" % (sum, table, clust)
-  return src, bsize, bcount, sum, table.stats(), clust.stats()
+  colls = table.stats()
+  clust  = clust.stats()
+  # score is geometric mean of collision and cluster performance.
+  score = (colls.perf * clust.perf)**0.5
+  return src, bsize, bcount, sum, colls, clust, score
 
 def fmtstats(stats):
   return '%s/%s/%8.6f/%8.6f' % (stats.min, stats.max, stats.colls, stats.perf)
 
 def printtable(results):
   f = '='
-  fmt = '%3s %4s %7s %-52s %-31s %-31s'
-  frame = fmt % (3*f, 4*f, 7*f, 52*f, 25*f, 25*f)
+  hdr = '%3s %4s %7s %-52s %-25s %-25s %8s'
+  fmt = '%3s %4s %7s %-52s %-25s %-25s %8.6f'
+  frame = hdr % (3*f, 4*f, 7*f, 52*f, 25*f, 25*f, 8*f)
   print frame
-  print fmt % ('dat', 'bs', 'count', 'rollsum', 'hash min/max/col/perf', 'cluster min/max/col/perf')
+  print hdr % ('dat', 'bs', 'count', 'rollsum', 'hash min/max/col/perf', 'cluster min/max/col/perf', 'score')
   print frame
-  for src, bsize, bcount, sum, table, clust in results:
+  for src, bsize, bcount, sum, table, clust, score in results:
     if bsize >= 1024:
       bsize = '%sK' % (bsize/K)
     bcount = table.count
     table = fmtstats(table)
     clust = fmtstats(clust)
-    print fmt % (src, bsize, bcount, sum, table, clust)
+    print fmt % (src, bsize, bcount, sum, table, clust, score)
   print frame
 
 ans = []
@@ -60,6 +65,6 @@ for src in ('csv', 'zip'):
       for mult in (0xfffffffd, 0x55555555, 0x08104225, 0x41c64e6d):
 	sum = rollsum.RabinKarp(mult=mult, map=mapfunc)
         ans.append(dotest(src, blocksize, bc, sum))
-# Sort results by src, bsize, collisions and then clustering.
-ans = sorted(ans, key=lambda a: (a[0:2], -a[-2].perf, -a[-1].perf))
+# Sort results by src, bsize, and then score.
+ans = sorted(ans, key=lambda a: (a[0:2], -a[-1]))
 printtable(ans)
