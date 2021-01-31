@@ -1,5 +1,20 @@
 #!/usr/bin/python
 
+def modpow(k, n, m):
+  """ Calculate "k^n" modular "m" efficiently.
+
+  Even with python2 this is 100's of times faster than "(k**n) % m",
+  particularly for large "n".
+  """
+  ans = 1
+  kn = k
+  while n:
+    if n & 1:
+      ans = (ans*kn) % m
+    kn = (kn*kn) % m
+    n >>= 1
+  return ans
+
 def modinv(k, m):
   """ Calculate the inverse of "k" modular "m".
 
