@@ -7,11 +7,10 @@ def modpow(k, n, m):
   particularly for large "n".
   """
   ans = 1
-  kn = k
   while n:
     if n & 1:
-      ans = (ans*kn) % m
-    kn = (kn*kn) % m
+      ans = (ans*k) % m
+    k = (k*k) % m
     n >>= 1
   return ans
 
@@ -27,12 +26,11 @@ def modinv(k, m):
   assert not set(factors(m)) & set(factors(k))
   x, xn = 0, 1
   n, d = m, k
-  q, r = n / d, n % d
-  while r:
+  while d:
+    q, r = n // d, n % d
     x, xn = xn, x - xn * q
     n, d = d, r
-    q, r = n / d, n % d
-  i = xn % m
+  i = x % m
   # The inverse i multiplied by k modular m must give 1.
   assert (i * k) % m == 1
   return i
