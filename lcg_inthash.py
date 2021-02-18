@@ -5,7 +5,7 @@ def modpow(k, n, m):
 
   Even with python2 this is 100's of times faster than "(k**n) % m",
   particularly for large "n".
-  
+
   Note however that python's built-in pow() also supports an optional 3rd
   modular argument and is faster than this.
   """
@@ -55,9 +55,10 @@ def factors(n):
 _primes_searched = 2
 _primes = [2]
 def primes(m):
-  """Find all the primes below m."""
+  """Find all the primes less than or equal to m."""
   global _primes_searched
-  for x in xrange(_primes_searched+1, m):
+  # Check next odd numbers upto and including m.
+  for x in xrange((_primes_searched+1)|1, m+1, 2):
     if all(x % p for p in _primes):
       _primes.append(x)
   _primes_searched = max(_primes_searched, m)
