@@ -5,6 +5,9 @@ def modpow(k, n, m):
 
   Even with python2 this is 100's of times faster than "(k**n) % m",
   particularly for large "n".
+  
+  Note however that python's built-in pow() also supports an optional 3rd
+  modular argument and is faster than this.
   """
   ans = 1
   while n:
