@@ -235,6 +235,51 @@ class Gear(BaseHash):
   def rotate(self, c1, cn):
     self.rollin(cn)
 
+
+class RGear(BaseHash):
+  """RGear rolling checksum.
+
+  This is a modified version of Gear that uses a right shift instead of a left
+  shift as introduced in https://github.com/ronomon/deduplication. It is
+  unusual and harder to analyse because it means bytes don't fully "expire"
+  from the hash, so bytes from the very start of the block can modify the
+  hash. This is because addition in the Gear rollsum also propogates some bit
+  changes upwards. This means the sliding window size is variable depending on
+  the data. It still usually only includes the last 32 bytes, because the
+  chance of a changed older byte impacting on bits in the hash quickly
+  approaches zero.
+  """
+
+  def __init__(self, data=None, offs=0, map=ord):
+    # We only use 31 LSB's of the map output, so wrap map if it is >31bit.
+    cmax = max(map(chr(c)) for c in xrange(256))
+    if cmax > 0x7fffffff:
+      _map = lambda c: map(c) & 0x7fffffff
+      _map.__name__ = map.__name__
+    else:
+      _map = map
+    super(RGear, self).__init__(data, 0, offs, _map)
+
+  def __str__(self):
+    return 'RGear(offs=%s, map=%s)' % (
+        self.offs, self.map.__name__)
+
+  def update(self, data):
+    for c in data:
+      self.sum = ((self.sum>>1) + self.map(c) + self.offs)
+    self.count += len(data)
+
+  def rollin(self, cn):
+    self.sum = ((self.sum>>1) + self.map(cn) + self.offs)
+    self.count += 1
+
+  def rollout(self, c1):
+    self.count -= 1
+
+  def rotate(self, c1, cn):
+    self.sum = ((self.sum>>1) + self.map(cn) + self.offs)
+
+
 inf = float('inf')
 
 class Stats(object):
@@ -436,7 +481,7 @@ if __name__ == "__main__":
   def rollsum(s):
     """Parser for --rollsum argument."""
     try:
-      return dict(rs=RollSum, rk=RabinKarp, cp=CyclicPoly, gr=Gear)[s]
+      return dict(rs=RollSum, rk=RabinKarp, cp=CyclicPoly, gr=Gear, rg=RGear)[s]
     except KeyError:
       raise ValueError(s)
 
@@ -456,7 +501,7 @@ if __name__ == "__main__":
       return int(s)
 
   parser = argparse.ArgumentParser(description='Test different rollsum variants')
-  parser.add_argument('--rollsum','-R', type=rollsum, default=RollSum, help='Rollsum to use "rs|rk|cp|gr".')
+  parser.add_argument('--rollsum','-R', type=rollsum, default=RollSum, help='Rollsum to use "rs|rk|cp|gr|rg".')
   parser.add_argument('--blocksize','-B', type=size, default=1024, help='Block size to use.')
   parser.add_argument('--blockcount','-C', type=size, default=1000000, help='Number of blocks to use.')
   parser.add_argument('--seed', type=int, default=0, help='Value to initialize hash to.')
@@ -478,6 +523,8 @@ if __name__ == "__main__":
     rollsum = CyclicPoly(seed=args.seed, offs=args.offs, map=args.map)
   elif args.rollsum == Gear:
     rollsum = Gear(offs=args.offs, map=args.map)
+  elif args.rollsum == RGear:
+    rollsum = RGear(offs=args.offs, map=args.map)
   sumtable = HashTable(2**32, lambda k: k)
   s1index = HashTable(2**16, lambda k: k & 0xffff)
   s2index = HashTable(2**16, lambda k: k >> 16)
