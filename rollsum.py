@@ -248,6 +248,11 @@ class RGear(BaseHash):
   the data. It still usually only includes the last 32 bytes, because the
   chance of a changed older byte impacting on bits in the hash quickly
   approaches zero.
+
+  Because the hash can include earlier bytes, it's possible for this to give a
+  different rolling hash result for identical 32 byte windows. This messes a
+  bit with analysing this hash, since identical windows can appear multiple
+  times in different hash buckets.
   """
 
   def __init__(self, data=None, offs=0, map=ord):
@@ -266,18 +271,18 @@ class RGear(BaseHash):
 
   def update(self, data):
     for c in data:
-      self.sum = ((self.sum>>1) + self.map(c) + self.offs)
+      self.sum = ((self.sum>>1) + self.map(c) + self.offs) & self.mask
     self.count += len(data)
 
   def rollin(self, cn):
-    self.sum = ((self.sum>>1) + self.map(cn) + self.offs)
+    self.sum = ((self.sum>>1) + self.map(cn) + self.offs) & self.mask
     self.count += 1
 
   def rollout(self, c1):
     self.count -= 1
 
   def rotate(self, c1, cn):
-    self.sum = ((self.sum>>1) + self.map(cn) + self.offs)
+    self.sum = ((self.sum>>1) + self.map(cn) + self.offs) & self.mask
 
 
 inf = float('inf')
@@ -400,6 +405,10 @@ _mix32_map = [mix32(i) for i in xrange(256)]
 def mix(c):
   return _mix32_map[ord(c)]
 
+_lcg_map = [(c * 1664525 + 1013904223) & 0xffffffff for c in xrange(256)]
+def lcg(c):
+  return _lcg_map[ord(c)]
+
 # This is the bytehash map used by ipfs buzhash.
 _ipfs_map = [
     0x6236e7d5, 0x10279b0b, 0x72818182, 0xdc526514, 0x2fd41e3d, 0x777ef8c8,
@@ -488,7 +497,7 @@ if __name__ == "__main__":
   def map(s):
     """Parser for --map argument."""
     try:
-      return dict(ord=ord, pow=pow, mul=mul, mix=mix, ipfs=ipfs)[s]
+      return dict(ord=ord, pow=pow, mul=mul, mix=mix, lcg=lcg, ipfs=ipfs)[s]
     except KeyError:
       raise ValueError(s)
 
@@ -508,7 +517,7 @@ if __name__ == "__main__":
   parser.add_argument('--offs', type=int, default=31, help='Value to add to each input byte.')
   parser.add_argument('--base', type=eval, default=2**16, help='RollSum value to mod s1 and s2 with.')
   parser.add_argument('--mult', type=eval, default=0x08104225, help='RabinKarp multiplier to use.')
-  parser.add_argument('--map', type=map, default=ord, help='Map type to use "ord|pow|mul|mix|ipfs".')
+  parser.add_argument('--map', type=map, default=ord, help='Map type to use "ord|pow|mul|mix|lcg|ipfs".')
   parser.add_argument('--indexbits', type=int, default=20, help='Number of bits in the hashtable index.')
   args=parser.parse_args()
 
