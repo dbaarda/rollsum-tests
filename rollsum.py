@@ -1,5 +1,6 @@
 #!/usr/bin/pypy -O
 import md5
+from math import sqrt,log
 from lcg_inthash import modinv
 
 class BaseHash(object):
@@ -285,6 +286,38 @@ class RGear(BaseHash):
     self.sum = ((self.sum>>1) + self.map(cn) + self.offs) & self.mask
 
 
+class UGear(Gear):
+  """UGear rolling checksum.
+
+  This is a modified version of Gear that shifts the hash so the upper 20 bits are used
+  for the clustering test.
+  """
+
+  def __str__(self):
+    return 'UGear(offs=%s, map=%s)' % (self.offs, self.map.__name__)
+
+  def digest(self):
+    return (self.sum >> 12) | (self.sum << 20) & self.mask
+
+
+class MGear(UGear):
+  """MGear rolling checksum.
+
+  This is a modified version of UGear that adds in a multiply. This should
+  reduce the requirement for a good mapping.
+  """
+
+  def __str__(self):
+    return 'MGear(offs=%s, map=%s)' % (self.offs, self.map.__name__)
+
+  def update(self, data):
+    for c in data:
+      self.sum = (((self.sum<<1) + self.map(c) + self.offs)*0x08104225) & self.mask
+
+  def rollin(self, cn):
+    self.sum = (((self.sum<<1) + self.map(cn) + self.offs)*0x08104225) & self.mask
+
+
 inf = float('inf')
 
 class Stats(object):
@@ -340,7 +373,21 @@ class TableStats(Stats):
 
   @property
   def perf(self):
-    return self.avg / self.var
+    # This is the poisson distribution expected variance / measured variance
+    #return self.avg / self.var
+    # This is the binomial distribution expected variance / measured variance
+    return (float(self.size - 1) / self.size) * self.avg / self.var
+    # This is the binomial expected variance / upper-3-sigma measured variance
+    #var = self.avg * (float(self.size - 1) / self.size)
+    #var3s = self.var * (1 + 3*sqrt(2.0/self.size))
+    #return var / var3s
+
+  @property
+  def weight(self):
+    # This is log(1/e) where e is the error ratio for the variance.
+    # It's roughly proportional to the number of digits accuracy in the perf score.
+    e = sqrt(2.0/self.size)
+    return -log(e)
 
   @property
   def colls(self):
@@ -490,7 +537,7 @@ if __name__ == "__main__":
   def rollsum(s):
     """Parser for --rollsum argument."""
     try:
-      return dict(rs=RollSum, rk=RabinKarp, cp=CyclicPoly, gr=Gear, rg=RGear)[s]
+      return dict(rs=RollSum, rk=RabinKarp, cp=CyclicPoly, gr=Gear, rg=RGear, mg=MGear, ug=UGear)[s]
     except KeyError:
       raise ValueError(s)
 
@@ -510,7 +557,7 @@ if __name__ == "__main__":
       return int(s)
 
   parser = argparse.ArgumentParser(description='Test different rollsum variants')
-  parser.add_argument('--rollsum','-R', type=rollsum, default=RollSum, help='Rollsum to use "rs|rk|cp|gr|rg".')
+  parser.add_argument('--rollsum','-R', type=rollsum, default=RollSum, help='Rollsum to use "rs|rk|cp|gr|rg|mg|ug".')
   parser.add_argument('--blocksize','-B', type=size, default=1024, help='Block size to use.')
   parser.add_argument('--blockcount','-C', type=size, default=1000000, help='Number of blocks to use.')
   parser.add_argument('--seed', type=int, default=0, help='Value to initialize hash to.')
@@ -530,10 +577,8 @@ if __name__ == "__main__":
     rollsum = RabinKarp(seed=args.seed, offs=args.offs, map=args.map, mult=args.mult)
   elif args.rollsum == CyclicPoly:
     rollsum = CyclicPoly(seed=args.seed, offs=args.offs, map=args.map)
-  elif args.rollsum == Gear:
-    rollsum = Gear(offs=args.offs, map=args.map)
-  elif args.rollsum == RGear:
-    rollsum = RGear(offs=args.offs, map=args.map)
+  elif args.rollsum in (Gear, RGear, MGear, UGear):
+    rollsum = args.rollsum(offs=args.offs, map=args.map)
   sumtable = HashTable(2**32, lambda k: k)
   s1index = HashTable(2**16, lambda k: k & 0xffff)
   s2index = HashTable(2**16, lambda k: k >> 16)

@@ -37,6 +37,46 @@ spread over the entire hash. The older bytes have the entropy slowly removed
 from the LSBits of the hash, with only MSBits including entropy from the older
 bytes.
 
+RGear
+-----
+
+This is a widely used variant of Gear copied from
+https://github.com/ronomon/deduplication uses a right-shift instead of a left
+shift to ensure the least-significant-bits have the most entropy, and a
+mapping table constrained to 31 bits for efficiency in javascript. This means
+bytes don't fully "expire" from the hash, so it no longer only includes only
+the last 32 bytes, and older bytes can modify the hash. In practice the
+probability that older bytes modify the sum rapidly tends to zero the older
+they are. The chance that a byte propagates a bit change into the 32 bit hash
+is 1/2^(i-32) where "i" is the index back to the byte. This is equivalent to
+the window size being probabalistic, with a less than 0.4% chance the window
+is larger than 40 bytes.
+
+UGear
+-----
+
+This is idential to Gear except the hash bits are shifted so that the tests
+use the upper bits which include more entropy. This shows how much better Gear
+is if you use the upper bits instead of the lower bits.
+
+MGear
+-----
+
+This is a variant of UGear that adds a multiply operation to improve bit
+mixing across the hash. It should improve the hash and reduce the requirement
+for a mapping. It also copies UGears use of the upper bits. The update
+algorithm becomes;
+
+  H = (H << 1 + Cn) * 0x08104225
+
+This is like a hybrid of Gear and RabinKarp with a simple 'mul' mapping. It
+retains Gear's shift to expire out old bytes without needing to keep a rolling
+window, while using RabinKarps multiply to mix the bits more effectively. It
+also modifies the RabinKarp bit to apply the multiply after adding in the byte
+which ensures the last byte added is mixed over the whole hash, which is
+important because that last byte is a significant fraction of the entropy for
+small windows.
+
 Variations
 ==========
 
@@ -118,14 +158,22 @@ feeding them into the algorithm. This can distribute the input data
 better before feeding it to the hash algorithm, possibly producing a
 better hash distribution.
 
-In particular ASCII data tends to be tightly clustered around a small
-range of values, which produces very variance in sums of those values.
-For Rollsum with small blocksizes, the s1 sum of bytes ends up tightly
-clustered in a small part of the s1 part of the hashspace.
+In particular ASCII data tends to be tightly clustered around a small range of
+values, which produces very small variance in sums of those values. For
+Rollsum with small blocksizes, the s1 sum of bytes ends up tightly clustered
+in a small part of the s1 part of the hashspace.
 
-It can be used to both distribute clustered input bytes more evenly
-over the 8bit byte-range, or distribute them over more than 8bits if
-the algorithm can use it.
+Mappings can use lookup tables, which is the traditional solution that nearly
+always benchmarks fastest in isolation. However, lookup tables eat CPU cache,
+and a 256x32bit mapping table uses 1K, which can be a significant portion of a
+low end CPU's 32K L1 cache. In the wider context of a program doing many
+things that could use that L1 cache, simple mapping algorithms can be faster
+and give hash results nearly as good. Hence the desire to avoid the need for
+mappings or find fast-and-good-enough mapping algorithms.
+
+Mapping can be used to both distribute clustered input bytes more evenly over
+the 8bit byte-range, or distribute them over more than 8bits if the algorithm
+can use it.
 
 The mappings provided are "ord" (just use the byte value), "pow" (square the
 value into 16bits), "mul" (multiply the values by 0x08104225 into 32bits),
@@ -133,7 +181,8 @@ value into 16bits), "mul" (multiply the values by 0x08104225 into 32bits),
 IPFS chunker). Note for Rollsum we only use the lower 16 bits.
 
 Note xdelta uses a byte-> 16bit mapping that is equivalant to using 16 bits of
-mix. CyclicPoly recommends using a byte->32bit mapping like mix or ipfs.
+mix. CyclicPoly and Gear recommends using a byte->32bit mapping like mix or
+ipfs.
 
 Note that character offsets could also have been implemented using a
 mapping function. However, it was not done this way because the
@@ -149,8 +198,21 @@ We've tried 0x41c64e6d (Recommended LCG value), 0x01010101 (sparse bit
 pattern), 55555555 (balanced bit pattern), 0xfffffffd (dense bit
 pattern) 0x8104225 (varying bit pattern).
 
+RabinKarp without a mapping doesn't mix the last byte into all the hash bits.
+For very small rolling windows as used in chunking algorithms, the last byte
+can be a significant portion of the entropy. Changing the algorithm to add the
+byte before doing the multiply fixes this. This is equivalent to using the simple
+"mul" mapping, but can be more cheaply implemented by adjusting the algorithm.
+
 Measuring Performance
 =====================
+
+Hash Performance
+----------------
+
+For testing the general hash performance a range of block sizes are used
+to test how the hash performs against block size. Performance is measured by
+checking for collisions and clustering.
 
 Collisions are when different data blocks produce the same hash.
 Clustering is when many different data blocks produce hash values
@@ -162,46 +224,78 @@ Bad clustering with OK collision behaviour can be compensated for
 using something like MurmurHash3's mix32 finalizer function to
 distribute the clustered values evenly across the hash space.
 
-An ideal hash has an independently even chance of producing any hash
-value in the hash range for any entry. If you divide the hash range
-evenly over a subrange of buckets, there should be an even chance of
-producing a hash value in any bucket. Under these ideal conditions the
-number of entries per hash value or bucket should match a `Poisson
-distribution <http://en.wikipedia.org/wiki/Poisson_distribution>`_
-(from the definition of a Poisson distribution).
+An ideal hash has an independently even chance of producing any hash value in
+the hash range for any entry. If you divide the hash range evenly over a
+subrange of buckets, there should be an even chance of producing a hash value
+in any bucket. Under these ideal conditions the number of entries per hash
+value or bucket should match a `Binomial distribution
+<https://en.wikipedia.org/wiki/Binomial_distribution>`_, which tends towards a
+`Poisson distribution <http://en.wikipedia.org/wiki/Poisson_distribution>`_
+as the number of buckets gets large.
 
 The variance of the number of entries per hash value or bucket can be
 used to measure how evenly the hashes are spread. The larger the
 variance, the more buckets there are with way more or less than the
 mean, and hence are less evenly distributed.
 
-Poisson distributions have the interesting property that the variance
-is equal to the mean. This means we can use (mean / variance) as a
-measure of how good a hash function is, where small values near zero
-are bad, and 1.0 is ideal. Any values > 1.0 are probably statistical
-noise.
+Poisson distributions have the interesting property that the variance is equal
+to the mean. This means we can use (mean / variance) as a measure of how good
+a hash function is, where small values near zero are bad, and 1.0 is ideal.
+Any values > 1.0 are probably statistical noise. To be slightly more accurate
+we can use the expected binomial variance over the measured variance, which is
+((size-1)/size * mean/variance), where size is the number of buckets.
 
-Looking at the (mean / variance) of the number of entries per hash
-value gives us an indication of how close to ideal a hash is for
-collisions.
+Dividing the hash space into 2^N buckets is tested using "and_mask" (AndMask
+described above), "mod_mask" (ModMask described above) or "mix_mask" (mix32()
+and then ModMask). The (mean / variance) bucket size for these give an
+indication of the hashtable collision rate for the hash using those bucketing
+methods. Note this effectively tests the entropy in the bottom N bits, and the
+overall hash collision rate/entropy is tested using 2^32 buckets.
 
-Dividing the hash space into 2^N buckets is tested using "and_mask"
-(AndMask described above), "mod_mask" (ModMask described above) or
-"mix_mask" (mix32() and then ModMask). The (mean / variance) bucket
-size for these give an indication of the hashtable collision rate for
-the hash using those bucketing methods.
-
-Finally hashtable clustering is tested as "and_clust", "mod_clust",
-and "mix_clust" for the 3 bucketing methods merging 16 adjacent
-buckets into a "bucket-cluster". The (mean / variance) of the
-bucket-cluster sizes shows how badly the hash clusters for those
-bucketing methods.
+Finally hashtable clustering is tested as "and_clust", "mod_clust", and
+"mix_clust" for the 3 bucketing methods merging 16 adjacent buckets into a
+"bucket-cluster". The (mean / variance) of the bucket-cluster sizes shows how
+badly the hash clusters for those bucketing methods. Note this effectively
+tests the entropy in the 4th to Nth bit of the hash.
 
 Since we care about both collisions and clustering, a single "score" is
-calculated using a `Geometric Mean
-<https://en.wikipedia.org/wiki/Geometric_mean>`_ so a low score for either
+calculated using a `Weighted Geometric Mean
+<https://en.wikipedia.org/wiki/Weighted_geometric_mean>`_. They are weighted
+by ``log(1/sqrt(2/size))`` where size is the number of buckets. This weighting
+is based on the `confidence interval for the measured variance
+<https://en.wikipedia.org/wiki/Normal_distribution#Confidence_intervals>`_
+based on the number of buckets. It is roughly proportional to the number of
+significant digits in the score. This ensures a low score for either
 collisions or clustering drags the score down more than an arithmetic mean
-would.
+would, while still weighting the collisions about 2x as high as the
+clustering.
+
+Chunking performance
+--------------------
+
+For measuring chunking performance small windows of 32 and 16 bytes are used.
+The 32 byte size is commonly used for chunking algorithms and is the effective
+window size of Gear. The smaller 16 byte window is the minimum window size to
+give about 16 bits of entropy from highly redundant ASCII data, which is just
+enough for target chunk sizes upto 64K.
+
+In practice, Gear always has a window size of 32, and RGear has a variable
+window size of at least 32. When doing the test with window sizes smaller than
+the rollsum's effective window size, it means the rolling hash can include
+earlier bytes not included in the test window data. This means identical test
+window data can have different rolling hash values. This messes a bit with
+analysis, since identical windows can appear multiple times in different
+rolling hash buckets. In practice it's not too bad, and we only treat
+identical window data as identical if it also lands in the same rolling hash
+bucket. The main artifact is test runs over the same data can end up with
+different test-window counts for different rollsum algorithms due to the
+different duplicate detection.
+
+Gear based algorithms also include less and less entropy from the older bytes,
+so even though their effective windows are 32 bytes (or more for RGear), in
+practice they only really include about 16 bytes of entropy. So testing using
+a smaller 16 byte window gives a better indication of how good the rollsum is
+at representing/hashing the the last 16 byte window.
 
 Comparisons
 ===========
@@ -252,11 +346,11 @@ for ASCII is Rollsum without squaring for <4K blocksizes. Character mapping to
 expand the bytes across the full 32bit sum makes a big difference for very
 small 32 byte blocks, but has less impact for large blocks.
 
-Interesting is the ASCII collisions are much better for very small 32 byte
-blocks, almost certainly because the way the rotate/or operations distribute
-the bits means you don't have repeated bytes at multiples of 32 offsets
-canceling each other out. This means its probably fine for chunking operations
-where buzzhash is often used.
+Interesting is the ASCII collisions are much better for very small 16 and 32
+byte blocks, almost certainly because the way the rotate/or operations
+distribute the bits means you don't have repeated bytes at multiples of 32
+offsets canceling each other out. This means its probably fine for chunking
+operations where buzzhash is often used.
 
 The rotate/xor operations used don't overflow changes up to adjacent bits like
 add/mult does, so it's much more vulnerable to degenerate data patterns. In
@@ -281,28 +375,42 @@ RabinKarp has near optimal clustering and collision performance
 regardles of blocksizes or data type. It's only for random 16K blocks
 that CyclicPoly and Rollsum with squaring start to just (in the noise)
 match it on collisions while still just trailing it (in the noise) on
-clustering.
+clustering. It works fine without mappings for large windows.
+
+For tiny 16 byte chunking windows the 'mul' mapping is noticably better than
+no mapping for clustering. This is also visible to a lesser degree for 32 byte
+windows. This is because the 'mul' mapping ensures the last byte is mixed
+over the whole hash, and for small windows the last byte is a significant part
+of the entropy. This means a modified RabinKarp that adds the next byte before
+the multiply would be better for chunking applications.
 
 Gear
 ----
 
-Gear can only be used on 32byte blocksizes, and even then the oldest bytes are
-only represented in the MSBits of the sum. The collisions and clustering are
-fine for random data, but really terrible for ASCII data, so bad it's a bit
-hard to understand why. It's worth noting that the clustering test uses the
-lower 20bits of the hash, while Gear has best entropy in the upper bits, but
-the bad collisions suggests the upper bits are not particularly well
-distributed either. The mapping doesn't seem to help much, but again it
-probably helps to distribute the upper bits which are not checked by the
-collision test.
+Gear can only be used on 32 byte windows, and even then the oldest bytes are
+only represented in the MSBits of the sum. The way the data from old bytes
+gets slowly shifted out means that even though it effectively has a window
+size of 32 bytes, the hash doesn't include all the entropy in all those bytes,
+and probably only includes about 16 bytes worth. Highly redundant ASCII data
+has about 1 bit of entropy per byte, and the mapping distributes that entropy
+over the full 32bits with it concentrating into the upper bits. This means
+only the most significant 16 bits are really useful, so it's not going to be
+great for a chunker with a target chunk size greater than 64K.
 
-The way the data from old bytes gets slowly shifted out means that even though
-it effectively has a block size of 32 bytes, the hash doesn't include all the
-entropy in all those bytes, and probably only includes about 16 bytes worth.
-Assuming each input byte has 1 bit of entropy, and the mapping distributes
-that entropy over the full 32bits, only the most significant 16 bits are
-useful. This means it's not going to be great for a chunker with a target
-chunk size greater than 64K.
+For 32 byte windows the collisions and clustering are fine for random data,
+but really terrible for ASCII data. This is because it doesn't include all the
+entropy of the older bytes in that 32 byte window, resulting in lots of
+collisions and clustering. Also the clustering test uses the lower 20bits of
+the hash, while Gear has best entropy in the upper bits. Using a decent
+mapping doesn't seem to help, probably because there is so little entropy it
+doesn't matter how you mix it into the hash. It probably helps a bit to
+distribute the upper bits which are not checked by the collision test.
+
+Using a 16 byte window the collisions is much better provided you have a good
+mapping, showing that Gear really only has about the last 16 bytes worth of
+entropy for ASCII data. The collisions are still worse than RabinKarp, but
+it's not terribly worse. The clustering is still terrible because it's still
+testing the wrong bits.
 
 This poor collision and clustering performance probably doesn't matter much
 for most chunking algorithms which only check when select bits of the hash
@@ -310,22 +418,109 @@ have a particular value, but you need to use the higher bits, and ensure the
 value chosen is not a degenerate case with disproportionately high or low
 occurances.
 
+RGear
+-----
+
+This significantly improves clustering compared to Gear because the entropy is
+in the least-significant bits used by the clustering test. It also potentially
+includes some entropy from bytes before the 32 bytes. In every other respect
+it seems about the same as Gear, maybe a tiny bit worse for collisions,
+possibly due to only using 31 bit mappings.
+
+UGear
+-----
+
+This shows that using Gear's upper bits gives you much better clustering
+performance. For 16 bytes ASCII data it makes the clustering nearly as good as
+RabinKarp with the 'mul' mapping, but still not as good on collisions. It's
+maybe slightly better than RGear for collisions and clustering with the 32bit
+mapping.
+
+MGear
+-----
+
+This performs as well as UGear without requiring a lookup table.
+
 Summary
+=======
+
+Hashing
 -------
+
+Rsync style algorithms use the rollsum as a sliding window hash of a whole
+block in the size range of around 1K~64K, and is used for a hashtable lookup.
+For this application the hash quality for whole blocks of data matters, with
+poor collisions and clustering resulting in degraded hashtable performance.
 
 Rollsum without "pow" squaring is terrible for anything less than
 random 16K blocks. Adding squaring it becomes OK for collisions, but
 still has terrible clustering for ASCII for even 16K blocks, so needs
 a mix32 finalizer when using it for a hashtable.
 
-CyclicPoly the worst collisions for ASCII data, so is not worth
+CyclicPoly has the worst collisions for ASCII data, so is not worth
 considering.
 
-RabinKarp has excellent collision and clustering performance for all
-data types and block sizes. The good clustering means it can be used
-without a mix32 finalizer.
+RabinKarp has excellent collision and clustering performance for all data
+types and block sizes, without needing a mapping table. The good clustering
+means it can be used without a mix32 finalizer. This is the algorithm to use
+for new applications
 
-Gear is an efficient and OK algorithm for chunkers, but has really bad
-collisions and clustering on ASCII data, with only the upper 16 bits being
-useful. Always use the upper bits of the hash and ensure the value compared
-against is not a degenerate case.
+Chunking
+--------
+
+Chunking algorithms use the rollsum as a hash of only a tiny sliding window of
+about 16~48 bytes and use about N bits of the hash for a target chunk size of
+2^N bytes. So only N bits of the hash matter, and the consequence of poor
+collisions and clustering would only be a different chunk-size distribution
+from what is expected/desired. So speed matters more than hash quality, and
+the hash quality only matters for part of the hash.
+
+Rollsum is just terrible for windows this small, and is not worth using. A
+decent mapping can help reduce collisions, but its clustering is always
+terrible.
+
+Gear is an efficient and OK algorithm for chunkers, with the nice property
+that it doesn't need to keep a sliding window. However, it requires a mapping
+table and has really bad collisions and clustering on ASCII data, with an
+effective window size of only about 16 bytes and only the upper 16 bits are
+useful (as shown by "UGear"). Always use a good mapping table, use the upper
+bits of the hash, and ensure the value compared against is not a degenerate
+case. It might give poor chunk distributions for ASCII data with windows
+larger than 64K.
+
+RGear performs like Gear except the bottom bits are the best bits to use.
+However, it is a bit worse than Gear using the upper bits, so it's not worth
+using unless you really want to use the lower bits and/or have a 31 bit
+integer requirement.
+
+MGear performs as well as Gear but doesn't require a mapping table, using a
+multiply instead.
+
+CyclicPolly (AKA BuzzHash) needs to keep the sliding window and requires a
+mapping table, but peforms really well for windows up to 32 bytes, with
+excellent collisions and clustering across all the hash bits. However, it is a
+bit more vulnerable to degenerate cases and for windows larger than 32 bytes
+and ASCII it starts to suffer a bit from the collisions cases we see under the
+hash tests.
+
+RabinKarp with a "mul" mixer, modified to do the multiply after adding the
+byte, does require the sliding window but doesn't require a mapping table. It
+performs as well as CyclicPolly on collisions and clustering for any window
+size across all the hash bits. It doesn't have CyclicPollys vulnerability to
+degenerate cases and larger windows.
+
+For new applications, Gear with a good mapping and using the upper bits will
+be fast, doesn't need to keep the sliding window, and will be good enough for
+chunk sizes upto 64K. If your application is thrashing L1 cache, MGear will be
+just as good and faster because it removes the mapping table. Its small
+effective window size of only 16 bytes and about 16 effective bits does mean
+it's operating at the bare minimum required though, so it's possible you'd see
+degenerate cases with poor chunk distribution in some applications.
+
+If you need to retain the sliding window data anyway and want a better hash
+with more effective bits and/or a larger window, a modified RabinKarp with
+'mul' mixer is probably best. It doesn't require a mapping table and gives a
+good hash for any type of data and any window size.
+
+For existing applications BuzzHash is fine. It is about as good as the
+modified RabinKarp but requires a mapping table.

@@ -12,8 +12,10 @@ def dotest(src, bsize, bcount, sum):
   #print "%-52s: %s %s" % (sum, table, clust)
   colls = table.stats()
   clust  = clust.stats()
-  # score is geometric mean of collision and cluster performance.
-  score = (colls.perf * clust.perf)**0.5
+  collsw, clustw = colls.weight, clust.weight
+  # Score is geometric mean of collision and cluster performance,
+  # Weighted by their digits of accuracy.
+  score = (colls.perf**collsw * clust.perf**clustw)**(1/(collsw + clustw))
   return src, bsize, bcount, sum, colls, clust, score
 
 def fmtstats(stats):
@@ -36,16 +38,27 @@ def printtable(results):
     print fmt % (src, bsize, bcount, sum, table, clust, score)
   print frame
 
+
+datas = ('csv', 'zip')
+sizes = (16, 32, 1*K, 4*K, 16*K, 64*K) # 256*K)
 ans = []
 # Test for different sources.
-for src in ('csv', 'zip'):
-  # test Gear rollsum with blocksize=32 only.
-  blocksize = 32
-  for mapfunc in (ord, rollsum.mul, rollsum.mix, rollsum.ipfs):
-    sum = rollsum.Gear(map=mapfunc)
-    ans.append(dotest(src, blocksize, bc, sum))
+for src in datas:
   # Test for different blocksize.
-  for blocksize in (32, 1*K, 4*K, 16*K, 64*K): # 256*K):
+  for blocksize in sizes:
+    # test Gear variants with blocksize<=32 only.
+    if blocksize <= 32:
+      # Test Gear variants with different mappings.
+      for mapfunc in (ord, rollsum.mul, rollsum.mix, rollsum.ipfs):
+        sum = rollsum.Gear(map=mapfunc)
+        ans.append(dotest(src, blocksize, bc, sum))
+        sum = rollsum.RGear(map=mapfunc)
+        ans.append(dotest(src, blocksize, bc, sum))
+        sum = rollsum.UGear(map=mapfunc)
+        ans.append(dotest(src, blocksize, bc, sum))
+      # Test MGear with ord mapping only.
+      sum = rollsum.MGear(map=ord)
+      ans.append(dotest(src, blocksize, bc, sum))
     # Test rsync rollsum seed and offs values.
     sum = rollsum.RollSum(seed=0, offs=31, base=0x10000, map=ord)
     ans.append(dotest(src, blocksize, bc, sum))
